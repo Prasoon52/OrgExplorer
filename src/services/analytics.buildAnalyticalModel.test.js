@@ -162,4 +162,27 @@ describe('buildAnalyticalModel', () => {
     expect(result.totalRepos).toEqual([])
     expect(result.contributors).toEqual([])
   })
+
+  it('separates open issues from open PRs when the PR count is known (#375)', () => {
+    const orgs = [{ login: 'org-a' }]
+    const repo = makeRepo('repo-a', { open_issues_count: 312 })
+    const result = buildAnalyticalModel(
+      orgs, { 'org-a': [repo] }, {}, { 'org-a': [repo] }, { 'org-a/repo-a': 156 }
+    )
+    const r = result.totalRepos[0]
+    expect(r.open_prs_count).toBe(156)
+    expect(r.openIssues).toBe(156)
+    expect(r.openIssuesExact).toBe(true)
+    expect(r.open_issues_count).toBe(312)
+  })
+
+  it('falls back to the combined count when the PR count is unknown', () => {
+    const orgs = [{ login: 'org-a' }]
+    const repo = makeRepo('repo-a', { open_issues_count: 7 })
+    const result = buildAnalyticalModel(orgs, { 'org-a': [repo] }, {}, { 'org-a': [repo] })
+    const r = result.totalRepos[0]
+    expect(r.open_prs_count).toBeNull()
+    expect(r.openIssues).toBe(7)
+    expect(r.openIssuesExact).toBe(false)
+  })
 })

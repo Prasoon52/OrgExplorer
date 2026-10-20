@@ -1,11 +1,25 @@
+// Open issues excluding pull requests.
+// GitHub's `open_issues_count` counts open issues AND open pull requests.
+// When the repo's open PR count is known (`open_prs_count`, fetched for the
+// analysed repos), the PRs are subtracted. Returns null when it is unknown.
+export function getOpenIssueCount(repo) {
+  if (repo?.open_prs_count == null) return null
+  const prs = Number(repo.open_prs_count)
+  if (!Number.isFinite(prs)) return null
+  return Math.max(0, (Number(repo.open_issues_count) || 0) - prs)
+}
+
 //  Repo Health Indicator
 // Activity (40%) + Issue Health (30%) + Diversity (30%)
+// Issue Health uses open issues only (pull requests excluded) when the open
+// PR count is known, and falls back to GitHub's combined count otherwise.
 export function computeHealthScore(repo, contributorCount = 0) {
   const pushedAtMs = Date.parse(repo.pushed_at)
   const daysSince = Number.isFinite(pushedAtMs) ? (Date.now() - pushedAtMs) / 86_400_000 : Infinity
   const activity = Math.max(0, 100 - daysSince)
-  const total = (Number(repo.open_issues_count) || 0) + 10
-  const issueHealth = Math.max(0, 100 - ((Number(repo.open_issues_count) || 0) / total) * 100)
+  const openIssues = getOpenIssueCount(repo) ?? (Number(repo.open_issues_count) || 0)
+  const total = openIssues + 10
+  const issueHealth = Math.max(0, 100 - (openIssues / total) * 100)
   const diversity = Math.min(100, contributorCount * 10)
   return Math.round(activity * 0.4 + issueHealth * 0.3 + diversity * 0.3)
 }
@@ -40,7 +54,9 @@ export function computeBusFactor(contributors = []) {
 // Unified Analytical Data Model
 // Merges multiple orgs into one normalized graph:
 // Organization → Repositories → Contributors → Issues/PRs
-export function buildAnalyticalModel(orgs, reposPerOrg, contribsPerRepo, totalReposPerOrg) {
+// `openPullsPerRepo` (optional) maps "org/repo" to its open PR count, used to
+// separate real issues from pull requests (see getOpenIssueCount).
+export function buildAnalyticalModel(orgs, reposPerOrg, contribsPerRepo, totalReposPerOrg, openPullsPerRepo = {}) {
   const allRepos = []
   const contributorMap = {}
   const totalRepos = [];
@@ -52,10 +68,24 @@ export function buildAnalyticalModel(orgs, reposPerOrg, contribsPerRepo, totalRe
     total.forEach(repo => {
       const key = `${org.login}/${repo.name}`
       const contribs = contribsPerRepo[key] || []
-      const health = computeHealthScore(repo, contribs.length)
+      const openPrs = Number.isFinite(openPullsPerRepo[key]) ? openPullsPerRepo[key] : null
+      const repoWithPrs = { ...repo, open_prs_count: openPrs }
+      const exactIssues = getOpenIssueCount(repoWithPrs)
+      const health = computeHealthScore(repoWithPrs, contribs.length)
       const activityClassification = computeActivityClassification(repo)
       const bf = computeBusFactor(contribs)
-      totalRepos.push({ ...repo, orgLogin: org.login, contributors: contribs, healthScore: health, activityClassification: activityClassification, busFactor: bf })
+      totalRepos.push({
+        ...repoWithPrs,
+        orgLogin: org.login,
+        // Best known open issue count: exact when PRs are known, otherwise
+        // GitHub's combined issues + PRs value (flagged by openIssuesExact).
+        openIssues: exactIssues ?? (Number(repo.open_issues_count) || 0),
+        openIssuesExact: exactIssues !== null,
+        contributors: contribs,
+        healthScore: health,
+        activityClassification: activityClassification,
+        busFactor: bf,
+      })
     })
 
     repos.forEach(repo => {
@@ -164,8 +194,13 @@ function download(content, filename, type = 'text/csv') {
 }
 
 export function exportReposCSV(repos) {
-  const header = ['Repository', 'Org', 'Stars', 'Forks', 'Open Issues', 'Health Score', 'Activity Classification', 'Language', 'Last Active']
-  const rows = repos.map(r => [r.name, r.orgLogin, r.stargazers_count, r.forks_count, r.open_issues_count, r.healthScore, r.activityClassification, r.language || 'N/A', r.pushed_at?.slice(0, 10)])
+  // "Open Issues" and "Open PRs" are left empty when the PR count is unknown;
+  // "Open Issues + PRs" is GitHub's combined value and is always present.
+  const header = ['Repository', 'Org', 'Stars', 'Forks', 'Open Issues', 'Open PRs', 'Open Issues + PRs', 'Health Score', 'Activity Classification', 'Language', 'Last Active']
+  const rows = repos.map(r => {
+    const exactIssues = getOpenIssueCount(r)
+    return [r.name, r.orgLogin, r.stargazers_count, r.forks_count, exactIssues ?? '', exactIssues === null ? '' : r.open_prs_count, r.open_issues_count, r.healthScore, r.activityClassification, r.language || 'N/A', r.pushed_at?.slice(0, 10)]
+  })
   download([header, ...rows].map(r => r.join(',')).join('\n'), 'orgexplorer-repos.csv')
 }
 

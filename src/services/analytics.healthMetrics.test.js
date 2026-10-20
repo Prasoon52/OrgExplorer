@@ -3,6 +3,7 @@ import {
   computeHealthScore,
   computeActivityClassification,
   computeBusFactor,
+  getOpenIssueCount,
 } from './analytics'
 
 function daysAgoISO(days) {
@@ -173,5 +174,36 @@ describe('computeActivityClassification with missing or invalid pushed_at', () =
 
   it('classifies an unparseable pushed_at string as Hibernating', () => {
     expect(computeActivityClassification({ pushed_at: 'not-a-date' })).toBe('Hibernating')
+  })
+})
+
+describe('open issue count excluding pull requests', () => {
+  // GitHub's open_issues_count includes open pull requests (#375).
+
+  it('subtracts open PRs from open_issues_count when the PR count is known', () => {
+    expect(getOpenIssueCount({ open_issues_count: 312, open_prs_count: 156 })).toBe(156)
+  })
+
+  it('returns null when the open PR count is unknown', () => {
+    expect(getOpenIssueCount({ open_issues_count: 10 })).toBeNull()
+    expect(getOpenIssueCount({ open_issues_count: 10, open_prs_count: null })).toBeNull()
+  })
+
+  it('never returns a negative count', () => {
+    expect(getOpenIssueCount({ open_issues_count: 1, open_prs_count: 3 })).toBe(0)
+  })
+
+  it('does not lower the health score for open PRs when the PR count is known', () => {
+    const base = { pushed_at: new Date().toISOString() }
+    const noIssues = computeHealthScore({ ...base, open_issues_count: 0, open_prs_count: 0 }, 2)
+    const onlyPrs = computeHealthScore({ ...base, open_issues_count: 2, open_prs_count: 2 }, 2)
+    expect(onlyPrs).toBe(noIssues)
+  })
+
+  it('falls back to open_issues_count when the PR count is unknown', () => {
+    const base = { pushed_at: new Date().toISOString() }
+    const unknown = computeHealthScore({ ...base, open_issues_count: 2 }, 2)
+    const twoIssues = computeHealthScore({ ...base, open_issues_count: 2, open_prs_count: 0 }, 2)
+    expect(unknown).toBe(twoIssues)
   })
 })

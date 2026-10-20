@@ -16,6 +16,7 @@ vi.mock('../services/github', () => ({
   fetchIssues: vi.fn(),
   fetchRateLimit: vi.fn(),
   fetchPulls: vi.fn(),
+  fetchOpenPullCount: vi.fn(),
 }))
 
 function TestExplorer() {
@@ -164,6 +165,36 @@ describe('AppContext explore rate-limit and error handling', () => {
     await act(async () => {
       screen.getByText('Explore').click()
     })
+
+    expect(await screen.findByTestId('model-loaded')).toBeInTheDocument()
+    expect(screen.queryByTestId('error-message')).not.toBeInTheDocument()
+  })
+
+  it('fetches open PR counts only for repos that have open issues or PRs (#375)', async () => {
+    github.fetchOrg.mockResolvedValue({ login: 'test-org', public_repos: 2 })
+    github.fetchRepos.mockResolvedValue([
+      { name: 'busy-repo', stargazers_count: 5, forks_count: 2, open_issues_count: 4 },
+      { name: 'quiet-repo', stargazers_count: 1, forks_count: 0, open_issues_count: 0 },
+    ])
+    github.fetchContributors.mockResolvedValue([])
+    github.fetchOpenPullCount.mockResolvedValue(3)
+
+    render(<AppProvider><TestExplorer /></AppProvider>)
+    await act(async () => { screen.getByText('Explore').click() })
+    await screen.findByTestId('model-loaded')
+
+    expect(github.fetchOpenPullCount).toHaveBeenCalledTimes(1)
+    expect(github.fetchOpenPullCount).toHaveBeenCalledWith('test-org', 'busy-repo', '')
+  })
+
+  it('still loads the analysis when counting open PRs fails', async () => {
+    github.fetchOrg.mockResolvedValue({ login: 'test-org', public_repos: 1 })
+    github.fetchRepos.mockResolvedValue([{ name: 'repo', stargazers_count: 1, forks_count: 0, open_issues_count: 2 }])
+    github.fetchContributors.mockResolvedValue([])
+    github.fetchOpenPullCount.mockRejectedValue(new Error('RATE_LIMIT'))
+
+    render(<AppProvider><TestExplorer /></AppProvider>)
+    await act(async () => { screen.getByText('Explore').click() })
 
     expect(await screen.findByTestId('model-loaded')).toBeInTheDocument()
     expect(screen.queryByTestId('error-message')).not.toBeInTheDocument()

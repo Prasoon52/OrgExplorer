@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { fetchOrg, fetchRepos, fetchContributors, fetchIssues, fetchRateLimit, fetchPulls } from '../services/github'
+import { fetchOrg, fetchRepos, fetchContributors, fetchIssues, fetchRateLimit, fetchPulls, fetchOpenPullCount } from '../services/github'
 import { buildAnalyticalModel, getTopRepositories } from '../services/analytics'
 import { saveAnalysis, loadAnalysis } from '../services/cache'
 
@@ -239,8 +239,31 @@ export function AppProvider({ children }) {
         }
       }
 
+      // GitHub's open_issues_count includes open pull requests. Fetch each
+      // analysed repo's open PR count (1 cached request per repo, same
+      // top-10/all scoping as contributors) so issues and PRs can be shown
+      // separately. Repos with open_issues_count 0 cannot have open PRs, so
+      // they cost no request. Failures leave the count unknown; the analysis
+      // still completes and falls back to the combined value.
+      setLoadMsg('Counting open pull requests...')
+      const openPullsPerRepo = {}
+      for (const org of validOrgs) {
+        const repos = reposPerOrg[org.login] || []
+        for (let i = 0; i < repos.length; i += 10) {
+          const batch = repos.slice(i, i + 10)
+          await Promise.allSettled(batch.map(async repo => {
+            const key = `${org.login}/${repo.name}`
+            if (!(Number(repo.open_issues_count) > 0)) {
+              openPullsPerRepo[key] = 0
+              return
+            }
+            openPullsPerRepo[key] = await fetchOpenPullCount(org.login, repo.name, pat)
+          }))
+        }
+      }
+
       setLoadMsg('Building analytical data model...')
-      const builtModel = buildAnalyticalModel(validOrgs, reposPerOrg, contribsPerRepo, totalReposPerOrg)
+      const builtModel = buildAnalyticalModel(validOrgs, reposPerOrg, contribsPerRepo, totalReposPerOrg, openPullsPerRepo)
       setModel(builtModel)
 
       setIsComplete(!!pat)

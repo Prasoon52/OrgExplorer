@@ -75,12 +75,10 @@ export async function cacheClear() {
   } catch { return false }
 }
 
-// Core fetchWithCache
-async function fetchWithCache(url, pat) {
-  // L2 check
-  const cached = await cacheGet(url)
-  if (cached) return cached
-
+// Shared GitHub request: sends the request, broadcasts rate-limit headers and
+// maps error statuses to the categories the rest of the app expects.
+// Returns the Response so callers can read the body or the headers.
+async function githubRequest(url, pat) {
   const headers = { Accept: 'application/vnd.github.v3+json' }
   if (pat) headers.Authorization = `token ${pat}`
 
@@ -121,6 +119,17 @@ async function fetchWithCache(url, pat) {
   }
   if (res.status === 404) throw new Error('NOT_FOUND')
 
+  return res
+}
+
+// Core fetchWithCache
+async function fetchWithCache(url, pat) {
+  // L2 check
+  const cached = await cacheGet(url)
+  if (cached) return cached
+
+  const res = await githubRequest(url, pat)
+
   if (res.status === 204 || res.status === 409) {
     // Empty repository (e.g. contributors on a repo with no commits):
     // GitHub answers with no JSON body, so res.json() below would throw
@@ -138,6 +147,18 @@ async function fetchWithCache(url, pat) {
   const data = await res.json()
   cacheSet(url, data) // write-back, non-blocking
   return data
+}
+
+/**
+ * Read the page number of the rel="last" link from a GitHub `Link` header.
+ * Returns null when the header is missing or has no "last" link
+ * (i.e. all results fit on the first page).
+ */
+export function parseLastPage(linkHeader) {
+  if (typeof linkHeader !== 'string') return null
+  const last = linkHeader.split(',').find(part => /rel="last"/.test(part))
+  const match = last && last.match(/[?&]page=(\d+)/)
+  return match ? Number(match[1]) : null
 }
 
 // Public service functions
@@ -190,6 +211,42 @@ export async function fetchPulls(org, repo, pat) {
     if(data.length < 100) break
   }
   return all
+}
+
+/**
+ * Count the open pull requests of a repository with a single request.
+ *
+ * GitHub's `open_issues_count` on a repository includes open pull requests,
+ * so this count is needed to separate real issues from PRs. With
+ * `per_page=1`, the `Link` header's rel="last" page number equals the total
+ * number of open PRs, so no PR data has to be downloaded.
+ *
+ * The count is cached for the same TTL as every other response. It uses its
+ * own cache key because the cached value is a number, not the response body.
+ */
+export async function fetchOpenPullCount(org, repo, pat) {
+  const url = `https://api.github.com/repos/${org}/${repo}/pulls?state=open&per_page=1`
+  const cacheKey = `${url}&oe_count=1`
+
+  const cached = await cacheGet(cacheKey)
+  if (typeof cached === 'number') return cached
+
+  const res = await githubRequest(url, pat)
+  let count = 0
+  if (res.ok && res.status !== 204) {
+    const lastPage = parseLastPage(res.headers.get('link'))
+    if (lastPage !== null) {
+      count = lastPage
+    } else {
+      const data = await res.json()
+      count = Array.isArray(data) ? data.length : 0
+    }
+  } else if (!res.ok && res.status !== 409) {
+    throw new Error(`HTTP_${res.status}`)
+  }
+
+  cacheSet(cacheKey, count) // write-back, non-blocking
+  return count
 }
 
 export async function fetchRateLimit(pat) {

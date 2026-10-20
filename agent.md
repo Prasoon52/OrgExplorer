@@ -106,7 +106,9 @@ see git history around "PR-metrics scoping" for a real example.
 
 ## Derived Metrics
 
-- Health Score
+- Health Score (Issue Health uses open issues excluding pull requests via
+  `getOpenIssueCount()`; GitHub's `open_issues_count` includes open PRs.
+  When a repo's open PR count is unknown it falls back to `open_issues_count`.)
 - Activity Classification (repo-level; previously called "lifecycle" in
   some older code/tooltips — that naming is deprecated, use
   `activityClassification`)
@@ -149,6 +151,7 @@ blast radius — treat it as an architecture change, not a local fix.
 | Contributors/repo | ≤100 (1 page) | ≤1000 (10 pages) |
 | Issues/repo | ≤100 (1 page) | ≤1000 (10 pages) |
 | Pull Requests/repo | ≤100 (1 page) | ≤1000 (10 pages) |
+| Open PR count/repo (`fetchOpenPullCount`) | 1 request per analysed repo (top 10/org) | 1 request per repo |
 
 These caps live in `services/github.js` inside each `fetchX` function as
 `maxPages = pat ? 10 : 1` (or `5` for the initial repo list). Keep them

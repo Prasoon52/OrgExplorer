@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { normalizeCacheKey, fetchOrg, fetchRepos, fetchContributors } from './github'
+import { normalizeCacheKey, fetchOrg, fetchRepos, fetchContributors, fetchOpenPullCount, parseLastPage } from './github'
 
 /** Minimal in-memory stand-in for the IndexedDB API surface used by github.js. */
 function installFakeIndexedDB() {
@@ -234,5 +234,58 @@ describe('empty-repository responses', () => {
     }))
 
     await expect(fetchOrg('test-org', 'pat')).rejects.toThrow('HTTP_403')
+  })
+})
+
+describe('open pull request count (#375)', () => {
+  function installPullsStub({ link = null, body = [] } = {}) {
+    const calls = []
+    vi.stubGlobal('fetch', async url => {
+      calls.push(String(url))
+      return {
+        status: 200,
+        ok: true,
+        headers: { get: h => (h.toLowerCase() === 'link' ? link : '5000') },
+        json: async () => body,
+      }
+    })
+    return calls
+  }
+
+  it('parses the last page number from a Link header', () => {
+    const link = '<https://api.github.com/repositories/1/pulls?state=open&per_page=1&page=2>; rel="next", ' +
+      '<https://api.github.com/repositories/1/pulls?state=open&per_page=1&page=156>; rel="last"'
+    expect(parseLastPage(link)).toBe(156)
+    expect(parseLastPage(null)).toBeNull()
+    expect(parseLastPage('<https://x?page=2>; rel="next"')).toBeNull()
+  })
+
+  it('reads the total from the Link header with a single per_page=1 request', async () => {
+    installFakeIndexedDB()
+    const calls = installPullsStub({
+      link: '<https://api.github.com/repositories/1/pulls?state=open&per_page=1&page=156>; rel="last"',
+      body: [{ number: 1 }],
+    })
+    expect(await fetchOpenPullCount('AOSSIE-Org', 'DebateAI', 'pat')).toBe(156)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toContain('/pulls?state=open&per_page=1')
+  })
+
+  it('uses the body length when there is no Link header (0 or 1 open PR)', async () => {
+    installFakeIndexedDB()
+    installPullsStub({ body: [{ number: 1 }] })
+    expect(await fetchOpenPullCount('org', 'one-pr', 'pat')).toBe(1)
+
+    installFakeIndexedDB()
+    installPullsStub({ body: [] })
+    expect(await fetchOpenPullCount('org', 'no-prs', 'pat')).toBe(0)
+  })
+
+  it('caches the count, including zero, so repeats cost no request', async () => {
+    installFakeIndexedDB()
+    const calls = installPullsStub({ body: [] })
+    expect(await fetchOpenPullCount('org', 'repo', 'pat')).toBe(0)
+    expect(await fetchOpenPullCount('org', 'repo', 'pat')).toBe(0)
+    expect(calls).toHaveLength(1)
   })
 })

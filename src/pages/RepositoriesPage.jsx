@@ -78,7 +78,8 @@ export default function RepositoriesPage() {
     ['name', 'Repository'],
     ['stargazers_count', 'Stars'],
     ['forks_count', 'Forks'],
-    ['open_issues_count', 'Open Issues'],
+    ['openIssues', 'Open Issues'],
+    ['open_prs_count', 'Open PRs'],
     ['healthScore', 'Health'],
     ['language', 'Language'],
     ['pushed_at', 'Repository Activity'],
@@ -171,7 +172,9 @@ export default function RepositoriesPage() {
               <ul style={{ marginLeft: 18 }}>
                 <li>Stars → Community interest</li>
                 <li>Forks → Adoption & contributions</li>
-                <li>Issues → Current maintenance workload</li>
+                <li>Open Issues → Current maintenance workload (pull requests excluded)</li>
+                <li>Open PRs → Contributions waiting for review</li>
+                <li>* → Open PR count not fetched for this repository, so the number includes PRs. Run Complete Analysis for exact counts.</li>
               </ul>
             </div>
           </div>
@@ -273,7 +276,24 @@ export default function RepositoriesPage() {
 </td>
                   <td style={{ padding: '10px 14px', fontSize: 13, color: 'var(--text2)' }}>{r.stargazers_count.toLocaleString()}</td>
                   <td style={{ padding: '10px 14px', fontSize: 13, color: 'var(--text2)' }}>{r.forks_count.toLocaleString()}</td>
-                  <td style={{ padding: '10px 14px', fontSize: 13, color: r.open_issues_count > 30 ? 'var(--red)' : 'var(--text2)' }}>{r.open_issues_count}</td>
+                  {(() => {
+                    // Older cached analyses do not have openIssues; fall back to GitHub's combined value.
+                    const openIssues = r.openIssues ?? r.open_issues_count
+                    const exact = r.openIssuesExact === true
+                    return (
+                      <>
+                        <td
+                          style={{ padding: '10px 14px', fontSize: 13, color: openIssues > 30 ? 'var(--red)' : 'var(--text2)' }}
+                          title={exact ? undefined : 'Includes open pull requests. Run Complete Analysis for an exact issue count.'}
+                        >
+                          {openIssues}{!exact && '*'}
+                        </td>
+                        <td style={{ padding: '10px 14px', fontSize: 13, color: 'var(--text2)' }}>
+                          {exact ? r.open_prs_count : '—'}
+                        </td>
+                      </>
+                    )
+                  })()}
                   <td style={{ padding: '10px 14px', minWidth: 130 }}><HealthBar score={r.healthScore} /></td>
                   <td style={{ padding: '10px 14px', fontSize: 13, color: 'var(--text2)' }}>{r.language || 'N/A'}</td>
                   <td style={{ padding: '10px 14px' }}>
